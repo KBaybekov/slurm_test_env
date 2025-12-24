@@ -1,129 +1,137 @@
-FROM rockylinux:8 as slurmbuild
+# Stage 1: Build DEB packages
+FROM ubuntu:24.04 as slurmbuild
 
 ARG SLURM_VERSION
 
 # Install any required system tools
-RUN yum install -y epel-release  \
-  && yum install -y --enablerepo=powertools \
-      # Required for slurm
-      #rocm-device-libs \
-      hwloc-devel \
-      hdf5-devel \
-      man2html \
-      libibumad \
-      freeipmi-devel \
-      lua-devel \
-      munge-devel \
-      mariadb-devel \
-      numactl-devel \
-      pam-devel \
-      pmix-devel \
-      readline-devel \
-      http-parser-devel \
-      json-c-devel \
-      libyaml-devel \
-      libjwt-devel \
-      rrdtool-devel \
-      perl-ExtUtils-MakeMaker \
-      libbpf-devel \
-      dbus-devel \
-      git \
-      rpm-build \
-      wget \
-      python3 \
-      make \
-  && yum clean all \
-  && rm -rf /var/cache/yum
+RUN apt-get update && apt-get install -y \
+    # Основные инструменты сборки
+    bash-completion \
+    build-essential \
+    fakeroot \
+    devscripts \
+    dh-exec \
+    equivs \
+    git \
+    wget \
+    python3 \
+    # Зависимости для сборки Slurm
+    libgtk2.0-dev \
+    libhwloc-dev \
+    libhdf5-dev \
+    libfreeipmi-dev \
+    liblua5.3-dev \
+    liblz4-dev \
+    libmunge-dev \
+    libmariadb-dev \
+    libnuma-dev \
+    libpam0g-dev \
+    libperl-dev \
+    libipmimonitoring-dev \
+    libpmix-dev \
+    librdkafka-dev \
+    libreadline-dev \
+    libhttp-parser-dev \
+    libjson-c-dev \
+    libyaml-dev \
+    libjwt-dev \
+    librrd-dev \
+    libbpf-dev \
+    libdbus-1-dev \
+    # Системные зависимости
+    man2html \
+    freeipmi-tools \
+    libibumad3 \
+    # Менеджер пакетов Perl
+    perl \
+    # Очистка кеша
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
 
-# Build Slurm RPMs
-RUN wget https://download.schedmd.com/slurm/slurm-$SLURM_VERSION.tar.bz2 \
-    && rpmbuild -ta slurm-$SLURM_VERSION.tar.bz2 --with slurmrestd \
+COPY tmp/slurm-25.11.1 ./slurm-25.11.1/
+# Build Slurm DEBs
+
+# !!! revert to downloading & unpacking after testing !!!
+
+#RUN wget https://download.schedmd.com/slurm/slurm-$SLURM_VERSION.tar.bz2 \
+#    && tar -xaf slurm*tar.bz2 \
+RUN cd slurm-$SLURM_VERSION \
+    && mk-build-deps -i debian/control \
+    && debuild -us -uc -b \
     && rm -rf slurm-$SLURM_VERSION.tar.bz2
 
-FROM rockylinux:8
-COPY --from=slurmbuild \
-    /root/rpmbuild/RPMS/x86_64/slurm-$SLURM_VERSION*.rpm \
-    /root/rpmbuild/RPMS/x86_64/slurm-slurmctld-$SLURM_VERSION*.rpm \
-    /root/rpmbuild/RPMS/x86_64/slurm-slurmd-$SLURM_VERSION*.rpm \
-    /root/rpmbuild/RPMS/x86_64/slurm-slurmdbd-$SLURM_VERSION*.rpm \
-    /root/rpmbuild/RPMS/x86_64/slurm-slurmrestd-$SLURM_VERSION*.rpm \
-    /root/
+# Stage 2: Runtime image
+FROM ubuntu:24.04
 
 ARG SLURM_VERSION
 
-# Install any required system tools
-RUN yum install -y epel-release  \
-  && yum install -y --enablerepo=powertools \
-      # Support multiple Python versions for downstream testing scenarios
-      python39 \
-      python3.11 \
-      python3.11-pip \
-      python3.12 \
-      python3.12-pip \
-      # Required by Slurm
-      mariadb-server \
-      munge \
-      # Required by the Slurm REST API \
-      http-parser \
-      libjwt \
-      libyaml \
-      json-c \
-      # Required for installing python versions not available via yum
-      bzip2-devel \
-      libffi-devel \
-      openssl-devel \
-      wget \
-      gcc \
-      # General tools provided for use by downstream services
-      bats \
-      grep \
-      make \
-      which \
-  && yum clean all \
-  && rm -rf /var/cache/yum
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    # General tools
+    bats \
+    grep \
+    make \
+    which \
+    # Python versions available in Ubuntu 24.04
+    python3.12 \
+    # Required by Slurm
+    mariadb-server \
+    munge \
+    # Required by the Slurm REST API
+    libhttp-parser2.9 \
+    libjwt-gnutls2 \
+    libyaml-0-2 \
+    libjson-c5 \
+    # Additional Slurm dependencies
+    libhwloc15 \
+    libnuma1 \
+    libpmix2 \
+    libreadline8 \
+    librrd8 \
+    libbpf1 \
+    libdbus-1-3 \
+    libhdf5-103-1t64 \
+    libfreeipmi17 \
+    liblua5.4-0 \
+    libmunge2 \
+    libpam0g \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python versions not availible via yum
-RUN wget https://www.python.org/ftp/python/3.10.0/Python-3.10.0.tgz \
-    && tar -xzf Python-3.10.0.tgz \
-    && cd Python-3.10.0 \
-    && ./configure --enable-optimizations \
-    && make altinstall \
-    && cd / && rm -rf Python-3.10.0.tgz \
-    && rm -rf Python-3.10.0
+# Install Slurm from DEB packages built in stage 1
+COPY --from=slurmbuild /*.deb /tmp/
+RUN dpkg -i /tmp/*.deb || true \
+    && apt-get update \
+    && apt-get install -f -y \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /tmp/*.deb \
+    && rm -rf /var/lib/apt/lists/*
 
-# Clean up tools required for building Python
-RUN yum remove -y \
-    bzip2-devel \
-    libffi-devel \
-    openssl-devel \
-    wget \
-    gcc \
-    && yum clean all \
-    && rm -rf /var/cache/yum
+# Configure mariadb
+RUN mkdir -p /var/log/mysql \
+    && mysql_install_db \
+    && chown -R mysql:mysql /var/lib/mysql \
+    && chown -R mysql:mysql /var/log/mysql
 
-# Install mariadb
-RUN /usr/bin/mysql_install_db \
-  && chown -R mysql:mysql /var/lib/mysql \
-  && chown -R mysql:mysql /var/log/mariadb
-
-# Install Slurm
-RUN yum localinstall --enablerepo=powertools -y \
-    /root/slurm-$SLURM_VERSION*.rpm \
-    /root/slurm-slurmctld-$SLURM_VERSION*.rpm \
-    /root/slurm-slurmd-$SLURM_VERSION*.rpm \
-    /root/slurm-slurmdbd-$SLURM_VERSION*.rpm \
-    /root/slurm-slurmrestd-$SLURM_VERSION*.rpm \
-    && yum clean all \
-    && rm -rf /var/cache/yum \
-    && rm -rf /root/slurm*.rpm
-
-# Slurm requires a dedicated user/group to run
+# Create Slurm user
 RUN groupadd -r slurm && useradd -r -g slurm slurm
+
+# Create config directory
+RUN mkdir -p /etc/slurm /var/spool/slurmd \
+    && chown slurm:slurm /var/spool/slurmd
 
 # Add Slurm config files
 COPY --chown=slurm slurm_config/$SLURM_VERSION/slurm.conf /etc/slurm/slurm.conf
 COPY --chown=slurm --chmod=600 slurm_config/$SLURM_VERSION/slurmdbd.conf /etc/slurm/slurmdbd.conf
 
+# Create Munge user
+#RUN groupadd -r munge && useradd -r -g munge munge -s /sbin/nologin
+# Change ownership of MUNGE files
+RUN mkdir /run/munge/ \
+    && chown -R munge:munge /etc/munge /var/log/munge /var/lib/munge /run/munge
+
 # The entrypoint script starts the DB and defines necessary DB constructs
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
